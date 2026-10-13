@@ -14,7 +14,7 @@ import typing as ty
 from collections import Counter
 from copy import copy
 from enum import Enum, IntEnum
-from operator import attrgetter, itemgetter
+from operator import itemgetter
 from pathlib import Path
 from warnings import warn
 
@@ -28,6 +28,7 @@ from fileformats.core.typing import Self
 from fileformats.core.utils import _excluded_subpackages
 
 from .classifier import Classifier
+from .convertible import ConvertibleToMarker
 from .datatype import DataType
 from .decorators import VALIDATED_PROPERTY_FLAG, classproperty, mtime_cached_property
 from .exceptions import (
@@ -60,6 +61,13 @@ class SupportsDunderLT(ty.Protocol):
 
 class SupportsDunderGT(ty.Protocol):
     def __gt__(self, other: ty.Any) -> bool: ...
+
+
+def specificity_sort_key(datatype: ty.Type[DataType]) -> ty.Tuple[int, str]:
+    """Key to sort types from the most to the least specific, and then by their name.
+    A class always has more classes in its MRO than any of its base classes, so
+    subclasses are always sorted before their base classes"""
+    return (-len(inspect.getmro(datatype)), datatype.__name__)
 
 
 FileSetPrimitive: TypeAlias = ty.Union[os.PathLike[str], ty.Sequence[os.PathLike[str]]]
@@ -884,20 +892,27 @@ class FileSet(DataType):
         union_sort_key: ty.Callable[
             [ty.Type[DataType]],
             ty.Union[SupportsDunderLT, SupportsDunderGT],
-        ] = attrgetter("__name__"),
-    ) -> ty.Type["DataType"]:
-        """Union of types that can be converted to this type, including the current type.
-        If there are no other types that can be converted to this type, return the current type
+        ] = specificity_sort_key,
+    ) -> ty.Any:
+        """Union of types that can be converted to this type, including the current type
+        (or just the current type if there are no other types that can be converted to
+        it), annotated with the type it was created from so that it can be written to
+        a MIME-like string as "<namespace>/<format>+convertible-to" instead of the
+        union, i.e. ``Annotated[<union>, ConvertibleToMarker(cls)]``, which is what
+        ``ConvertibleTo[cls]`` evaluates to
 
         Parameters
         ----------
         union_sort_key : callable[[DataType], Any], optional
-            A function used to sort the union of types. Defaults to sorting by the type name.
+            A function used to sort the union of types. Defaults to sorting from the
+            most to the least specific type (i.e. subclasses before their base classes),
+            so that the first type in the union that matches a file-set is the most
+            specific one, and then by the type name.
 
         Returns
         -------
-        Type[DataType]
-            The type or union of types that can be converted to this type.
+        Annotated[Type[DataType], ConvertibleToMarker]
+            The annotated type or union of types that can be converted to this type.
         """
 
         datatypes: ty.List[ty.Type[DataType]] = [cls]
@@ -912,8 +927,9 @@ class FileSet(DataType):
             if issubclass(subcls, cls):
                 subcls._import_extras_module()
                 datatypes.extend(subcls.get_converters_dict().keys())
+        marker = ConvertibleToMarker(cls)
         if len(datatypes) == 1:
-            return cls
+            return ty.Annotated[cls, marker]
         concrete_datatypes = set()
 
         def add_concrete(datatype: ty.Type[DataType]) -> None:
@@ -930,9 +946,10 @@ class FileSet(DataType):
         for datatype in datatypes:
             add_concrete(datatype)
         # TODO: Might want to sort datatypes in a more specific order
-        return functools.reduce(
+        union = functools.reduce(
             operator.or_, sorted(concrete_datatypes, key=union_sort_key)
-        )  # type: ignore[return-value]
+        )
+        return ty.Annotated[union, marker]
 
     @classmethod
     def get_converter_defs(cls, source_format: type) -> ty.List["Converter"]:

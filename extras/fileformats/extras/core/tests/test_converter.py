@@ -1,3 +1,4 @@
+import typing as ty
 from pathlib import Path
 
 import attrs
@@ -5,7 +6,7 @@ import pytest
 from pydra.compose import python, shell
 
 from conftest import write_test_file
-from fileformats.core import converter
+from fileformats.core import ConvertibleToMarker, converter
 from fileformats.core.exceptions import FormatConversionError
 from fileformats.generic import File, FileSet
 from fileformats.testing import (
@@ -114,4 +115,7 @@ def test_convert_mapped_conversion(work_dir):
     ],
 )
 def test_convertible_from(klass: type[FileSet], convertible_from: type[FileSet]):
-    assert klass.convertible_from() == convertible_from
+    assert (
+        klass.convertible_from()
+        == ty.Annotated[convertible_from, ConvertibleToMarker(klass)]
+    )

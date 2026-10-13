@@ -1,42 +1,40 @@
 from ._version import __version__
 from .classifier import Classifier
+from .convertible import ConvertibleTo, ConvertibleToMarker
 from .datatype import DataType, FieldPrimitive
-from .mock import MockMixin
-from .fileset import FileSet, FileSetMetadata, FileSetPrimitive
+from .decorators import mtime_cached_property, validated_property
+from .extras import converter, extra, extra_implementation, find_extra_implementation
 from .field import Field
-from .identification import (
-    to_mime,
-    from_mime,
-    find_matching,
-    from_paths,
-)
-from .sampling import SampleFileGenerator
-from .extras import extra, extra_implementation, find_extra_implementation, converter
+from .fileset import FileSet, FileSetMetadata, FileSetPrimitive
+from .identification import find_matching, from_mime, from_paths, to_mime
 from .loaded import Loaded, LoadedMarker, check_loaded
-from .decorators import validated_property, mtime_cached_property
+from .mock import MockMixin
+from .sampling import SampleFileGenerator
 
 __all__ = [
     "__version__",
     "Classifier",
+    "converter",
+    "ConvertibleTo",
+    "ConvertibleToMarker",
     "DataType",
+    "Field",
+    "FieldPrimitive",
     "FileSet",
     "FileSetMetadata",
-    "FieldPrimitive",
     "FileSetPrimitive",
-    "MockMixin",
-    "Field",
-    "to_mime",
-    "from_mime",
-    "find_matching",
-    "from_paths",
-    "SampleFileGenerator",
-    "extra",
-    "extra_implementation",
     "find_extra_implementation",
-    "converter",
+    "find_matching",
+    "from_mime",
+    "from_paths",
     "Loaded",
     "LoadedMarker",
-    "check_loaded",
-    "validated_property",
+    "MockMixin",
     "mtime_cached_property",
+    "SampleFileGenerator",
+    "to_mime",
+    "validated_property",
+    "check_loaded",
+    "extra",
+    "extra_implementation",
 ]

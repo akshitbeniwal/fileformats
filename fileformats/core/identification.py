@@ -9,6 +9,7 @@ from pathlib import Path
 import fileformats.core
 from fileformats.core.exceptions import FormatDefinitionError, FormatRecognitionError
 
+from .convertible import ConvertibleToMarker
 from .utils import (
     add_exc_note,
     fspaths_converter,
@@ -130,6 +131,15 @@ def from_mime(
             return tuple[from_mime(item_mime)]  # type: ignore
     if "|" in mime_str:
         return functools.reduce(operator.or_, (from_mime(t) for t in mime_str.split("|")))  # type: ignore
+    if mime_str.endswith(ConvertibleToMarker.mime_suffix):
+        fmt = from_mime(mime_str[: -len(ConvertibleToMarker.mime_suffix)])
+        if not (inspect.isclass(fmt) and issubclass(fmt, fileformats.core.FileSet)):
+            raise FormatRecognitionError(
+                f"'{ConvertibleToMarker.mime_suffix}' in '{mime_str}' can only be "
+                f"applied to file-set formats, not {fmt}"
+            )
+        # Resolved from the converters installed in the current environment
+        return ConvertibleToMarker(fmt).hint()  # type: ignore[no-any-return]
     return fileformats.core.DataType.from_mime(mime_str)
 
 
@@ -155,11 +165,23 @@ def to_mime(
         registry if not
     """
     if is_optional(datatype):
-        return to_mime(get_optional_type(datatype)) + "?"
+        return to_mime(get_optional_type(datatype), official=official) + "?"
     # Handle forward references
     if isinstance(datatype, ty.ForwardRef):
         datatype = datatype.__forward_arg__
     origin = ty.get_origin(datatype)
+    if origin is ty.Annotated:
+        marker = ConvertibleToMarker.from_hint(datatype)
+        if marker is not None:
+            if official:
+                raise TypeError(
+                    f"Cannot convert {datatype} to official mime-type as it "
+                    "depends on the converters that are installed, please use "
+                    'official=False to convert to "mime-like" string instead'
+                )
+            # Only the format is written, not the formats that are convertible to
+            # it, so they are resolved again when the string is read
+            return to_mime(marker.format, official=False) + marker.mime_suffix
     if (
         origin is None
         and inspect.isclass(datatype)
