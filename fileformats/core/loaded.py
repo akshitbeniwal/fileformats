@@ -29,18 +29,18 @@ if ty.TYPE_CHECKING:
 __all__ = ["Loaded", "LoadedMarker", "check_loaded"]
 
 
+MarkerT = ty.TypeVar("MarkerT", bound="FormatMarker")
+
+
 @dataclass(frozen=True)
-class LoadedMarker:
-    """Metadata attached to an ``Annotated`` hint recording the source format"""
+class FormatMarker:
+    """Base for metadata attached to an ``Annotated`` hint recording the format it was
+    created from, e.g. ``Loaded[X]`` or ``ConvertibleTo[X]``"""
 
     format: ty.Type["FileSet"]
 
-    def accepts(self, fmt: ty.Type["FileSet"]) -> bool:
-        """Whether data loaded from `fmt` satisfies this marker (covariant)"""
-        return issubclass(fmt, self.format)
-
     @classmethod
-    def from_hint(cls, tp: ty.Any) -> ty.Optional["LoadedMarker"]:
+    def from_hint(cls: ty.Type[MarkerT], tp: ty.Any) -> ty.Optional[MarkerT]:
         """Return the marker of a ``Loaded[X]`` or ``Loaded[X] | None`` hint, or None
         for any other hint.
 
@@ -55,7 +55,9 @@ class LoadedMarker:
         return cls._from_annotated(tp)
 
     @classmethod
-    def all_from_hint(cls, tp: ty.Any) -> ty.Optional[ty.List["LoadedMarker"]]:
+    def all_from_hint(
+        cls: ty.Type[MarkerT], tp: ty.Any
+    ) -> ty.Optional[ty.List[MarkerT]]:
         """Return the markers of a union of ``Loaded[X]`` hints, optionally including
         None (e.g. ``Loaded[X] | Loaded[Y] | None``), in the order they appear, which
         callers can use to find the formats that data can be loaded from. A single
@@ -77,12 +79,21 @@ class LoadedMarker:
         return markers  # type: ignore[return-value]
 
     @classmethod
-    def _from_annotated(cls, tp: ty.Any) -> ty.Optional["LoadedMarker"]:
+    def _from_annotated(cls: ty.Type[MarkerT], tp: ty.Any) -> ty.Optional[MarkerT]:
         if ty.get_origin(tp) is Annotated:
             for meta in tp.__metadata__:
                 if isinstance(meta, cls):
                     return meta
         return None
+
+
+@dataclass(frozen=True)
+class LoadedMarker(FormatMarker):
+    """Metadata attached to an ``Annotated`` hint recording the source format"""
+
+    def accepts(self, fmt: ty.Type["FileSet"]) -> bool:
+        """Whether data loaded from `fmt` satisfies this marker (covariant)"""
+        return issubclass(fmt, self.format)
 
 
 def resolve_loaded_type(tp: ty.Any) -> ty.Any:
