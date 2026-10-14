@@ -1071,16 +1071,54 @@ class FileSet(DataType):
             }
         return cls._formats_by_name
 
-    @property
-    def all_file_paths(self) -> ty.Iterable[Path]:
-        """Paths of all files within the fileset"""
+    def all_file_paths(
+        self,
+        ignore_hidden_files: bool = False,
+        ignore_hidden_dirs: bool = False,
+    ) -> ty.List[Path]:
+        """Paths of all files within the fileset, including those nested within
+        directories
+
+        Parameters
+        ----------
+        ignore_hidden_files : bool
+            whether to ignore hidden files within nested directories (i.e. those
+            starting with '.')
+        ignore_hidden_dirs : bool
+            whether to ignore hidden directories within nested directories (i.e. those
+            starting with '.'), along with everything beneath them
+
+        Returns
+        -------
+        file_paths : list[Path]
+            the paths of the files within the fileset, in sorted order. Files that are
+            both listed explicitly and nested within a listed directory are only
+            included once
+
+        Raises
+        ------
+        FileNotFoundError
+            if a symbolic link within a nested directory is broken
+        """
+        file_paths: ty.Set[Path] = set()
         for fspath in self.fspaths:
             if fspath.is_file():
-                yield fspath
+                file_paths.add(fspath)
             else:
-                for dpath, _, file_paths in os.walk(fspath):
-                    for file_path in file_paths:
-                        yield Path(dpath) / file_path
+                for dpath, dirnames, filenames in os.walk(fspath):
+                    if ignore_hidden_dirs:
+                        # Prune in-place so the walk doesn't descend into them
+                        dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+                    for filename in filenames:
+                        if ignore_hidden_files and filename.startswith("."):
+                            continue
+                        file_path = Path(dpath) / filename
+                        if not file_path.exists():
+                            raise FileNotFoundError(
+                                f"Broken symbolic link '{file_path}' found within {self}"
+                            )
+                        file_paths.add(file_path)
+        return sorted(file_paths)
 
     def byte_chunks(
         self,
@@ -1092,6 +1130,8 @@ class FileSet(DataType):
     ) -> ty.Generator[ty.Tuple[str, ty.Iterator[bytes]], None, None]:
         """Yields relative paths for all files within the file-set along with iterators
         over their byte-contents. To be used when generating hashes for the file set.
+
+        Files are yielded once each, in the sorted order of `all_file_paths`.
 
         Parameters
         ----------
@@ -1168,42 +1208,15 @@ class FileSet(DataType):
 
             def chunk_file(fspath: Path) -> ty.Iterator[bytes]:
                 """Yields the contents of the file in byte chunks"""
-                if not fspath.is_file():
-                    assert fspath.is_symlink()  # broken symlink
-                    yield b"\x00"
-                else:
-                    with open(fspath, "rb") as fp:
-                        for chunk in iter(functools.partial(fp.read, chunk_len), b""):
-                            yield chunk
+                with open(fspath, "rb") as fp:
+                    for chunk in iter(functools.partial(fp.read, chunk_len), b""):
+                        yield chunk
 
-        def chunk_dir(fspath: Path) -> ty.Iterator[ty.Tuple[str, ty.Iterator[bytes]]]:
-            fspath = Path(fspath)
-            for dpath_str, _, filenames in sorted(os.walk(fspath)):
-                # Sort in-place to guarantee order.
-                filenames.sort()
-                dpath = Path(dpath_str)
-                if (
-                    ignore_hidden_dirs
-                    and dpath.name.startswith(".")
-                    and dpath != fspath
-                ):
-                    continue
-                for filename in filenames:
-                    if ignore_hidden_files and filename.startswith("."):
-                        continue
-                    yield (
-                        relative_path_str(dpath / filename),
-                        chunk_file(dpath / filename),
-                    )
-
-        for key, fspath in sorted(
-            ((relative_path_str(p), p) for p in self.fspaths),
-            key=itemgetter(0),
+        for fspath in self.all_file_paths(
+            ignore_hidden_files=ignore_hidden_files,
+            ignore_hidden_dirs=ignore_hidden_dirs,
         ):
-            if fspath.is_dir():
-                yield from chunk_dir(fspath)
-            else:
-                yield (key, chunk_file(fspath))
+            yield (relative_path_str(fspath), chunk_file(fspath))
 
     def hash(
         self,
@@ -1511,9 +1524,10 @@ class FileSet(DataType):
         decomposed_by: dict[Path, tuple[FileSet, tuple[Path, str, str]]] = {}
         for fileset in [self] + self.nested_filesets():
             if isinstance(fileset, File):
-                # Skip files that are nested within other paths (e.g. directories) of
-                # the file-set, as they will be handled along with their parent
-                if is_subpath(fileset.fspath, self.fspaths):
+                # Skip files that are nested within other included paths (e.g.
+                # directories) of the file-set, as they will be handled along with
+                # their parent
+                if is_subpath(fileset.fspath, to_include):
                     implicit.discard(fileset.fspath)
                     continue
                 # Skip files that aren't to be included (e.g. not required)
