@@ -1511,9 +1511,10 @@ class FileSet(DataType):
         decomposed_by: dict[Path, tuple[FileSet, tuple[Path, str, str]]] = {}
         for fileset in [self] + self.nested_filesets():
             if isinstance(fileset, File):
-                # Skip files that are nested within other paths (e.g. directories) of
-                # the file-set, as they will be handled along with their parent
-                if is_subpath(fileset.fspath, self.fspaths):
+                # Skip files that are nested within other included paths (e.g.
+                # directories) of the file-set, as they will be handled along with
+                # their parent
+                if is_subpath(fileset.fspath, to_include):
                     implicit.discard(fileset.fspath)
                     continue
                 # Skip files that aren't to be included (e.g. not required)

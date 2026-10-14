@@ -510,6 +510,51 @@ def test_decompose_fspaths_nested_fileset_in_directory(work_dir):
     assert decomposed == [(work_dir, "mario_dir", "")]
 
 
+def test_decompose_fspaths_required_file_in_unrequired_directory(work_dir):
+    class NestedMario(FileSet):
+        @validated_property
+        def header(self):
+            return Mario(next(p for p in self.fspaths if p.is_file()))
+
+    sub_dir = work_dir / "sub"
+    sub_dir.mkdir()
+    Path.touch(sub_dir / "header.mario")
+    Path.touch(sub_dir / "other.mario")
+
+    fileset = NestedMario([sub_dir, sub_dir / "header.mario"])
+
+    # The directory isn't required, so the required file nested within it shouldn't
+    # be dropped in favour of it
+    assert fileset.decomposed_fspaths(required_only=True) == [
+        (sub_dir, "header", ".mario")
+    ]
+    assert fileset.decomposed_fspaths(required_only=False) == [(work_dir, "sub", "")]
+
+
+def test_copy_trimmed_required_file_in_unrequired_directory(work_dir):
+    class NestedMario(FileSet):
+        @validated_property
+        def header(self):
+            return Mario(next(p for p in self.fspaths if p.is_file()))
+
+    src_dir = work_dir / "src"
+    sub_dir = src_dir / "sub"
+    sub_dir.mkdir(parents=True)
+    (sub_dir / "header.mario").write_text("header")
+    (sub_dir / "other.mario").write_text("other")
+    dest_dir = work_dir / "dest"
+    dest_dir.mkdir()
+
+    fileset = NestedMario([sub_dir, sub_dir / "header.mario"])
+    copied = fileset.copy(dest_dir, trim=True)
+
+    assert [p.relative_to(dest_dir) for p in copied.fspaths] == [
+        Path("sub") / "header.mario"
+    ]
+    assert (dest_dir / "sub" / "header.mario").read_text() == "header"
+    assert not (dest_dir / "sub" / "other.mario").exists()
+
+
 def test_copy_with_subpaths(work_dir):
     src_dir = work_dir / "src"
     src_dir.mkdir()
