@@ -754,17 +754,18 @@ def test_byte_chunks_matches_all_file_paths(work_dir: Path):
     fileset = FileSet([sub_dir, sub_dir / "z.mario"])
 
     for ignore_hidden_dirs in (False, True):
+        # Keys use the native path separator, so compare them as paths
         keys = [
-            k
+            Path(k)
             for k, _ in fileset.byte_chunks(
                 relative_to=work_dir, ignore_hidden_dirs=ignore_hidden_dirs
             )
         ]
         assert keys == [
-            p.relative_to(work_dir).as_posix()
+            p.relative_to(work_dir)
             for p in fileset.all_file_paths(ignore_hidden_dirs=ignore_hidden_dirs)
         ]
-    assert keys == ["sub/deep/c.mario", "sub/z.mario"]
+    assert keys == [Path("sub") / "deep" / "c.mario", Path("sub") / "z.mario"]
 
 
 def test_hash_files_keys(tmp_path: Path):
