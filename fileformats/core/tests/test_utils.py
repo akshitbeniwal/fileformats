@@ -784,6 +784,21 @@ def test_hash_files_keys(tmp_path: Path):
         fset.hash_files(relative_to=tmp_path / "bar")
 
 
+def test_hash_files_threaded_matches_serial(tmp_path: Path):
+    dpath = tmp_path / "dir"
+    (dpath / "sub").mkdir(parents=True)
+    for i in range(20):
+        (dpath / ("sub" if i % 2 else "") / f"{i}.txt").write_bytes(
+            os.urandom(random.randint(0, 3 * 8192))
+        )
+    directory = Directory(dpath)
+    serial = directory.hash_files(max_workers=1)
+    assert len(serial) == 20
+    assert directory.hash_files() == serial
+    assert directory.hash_files(max_workers=4) == serial
+    assert list(directory.hash_files(max_workers=4)) == list(serial)
+
+
 def test_metadata_collation1():
     metadata_series = [
         {"a": 1, "b": 2},

@@ -12,6 +12,7 @@ import sys
 import tempfile
 import typing as ty
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from copy import copy
 from enum import Enum, IntEnum
 from operator import itemgetter
@@ -74,6 +75,9 @@ FileSetPrimitive: TypeAlias = ty.Union[os.PathLike[str], ty.Sequence[os.PathLike
 
 
 FILE_CHUNK_LEN_DEFAULT = 8192
+# Filesets with fewer files than this are hashed serially, as the overhead of starting
+# a thread pool outweighs any gains
+MIN_FILES_FOR_THREADED_HASHING = 3
 
 
 logger = logging.getLogger("fileformats")
@@ -1266,6 +1270,7 @@ class FileSet(DataType):
         relative_to: ty.Optional[Path] = None,
         ignore_hidden_files: bool = False,
         ignore_hidden_dirs: bool = False,
+        max_workers: ty.Optional[int] = None,
     ) -> ty.Dict[str, str]:
         """Calculate hashes for all files in the file-set based on the relative paths and
         contents of its constituent files
@@ -1274,6 +1279,10 @@ class FileSet(DataType):
         ----------
         crypto : function, optional
             the cryptography method used to hash the files, by default hashlib.sha256
+        max_workers : int, optional
+            the number of threads used to hash the files concurrently. If None, defaults
+            to the default of ``concurrent.futures.ThreadPoolExecutor``. Pass 1 to hash
+            the files serially. Filesets with only a few files are always hashed serially
         **kwargs
             keyword args passed directly through to the ``hash_dir`` function
 
@@ -1284,19 +1293,29 @@ class FileSet(DataType):
         """
         if crypto is None:
             crypto = hashlib.sha256
-        file_hashes = {}
-        for path, bytes_iter in self.byte_chunks(
-            mtime=mtime,
-            chunk_len=chunk_len,
-            relative_to=relative_to,
-            ignore_hidden_files=ignore_hidden_files,
-            ignore_hidden_dirs=ignore_hidden_dirs,
-        ):
+
+        def hash_file(item: ty.Tuple[str, ty.Iterator[bytes]]) -> ty.Tuple[str, str]:
+            path, bytes_iter = item
             crypto_obj = crypto()
             for bytes_str in bytes_iter:
                 crypto_obj.update(bytes_str)
-            file_hashes[str(path)] = crypto_obj.hexdigest()
-        return file_hashes
+            return str(path), crypto_obj.hexdigest()
+
+        # Consume the generator up-front so that any errors in resolving the paths are
+        # raised here. The byte iterators are lazy, so no files are opened yet.
+        items = list(
+            self.byte_chunks(
+                mtime=mtime,
+                chunk_len=chunk_len,
+                relative_to=relative_to,
+                ignore_hidden_files=ignore_hidden_files,
+                ignore_hidden_dirs=ignore_hidden_dirs,
+            )
+        )
+        if mtime or max_workers == 1 or len(items) < MIN_FILES_FOR_THREADED_HASHING:
+            return dict(map(hash_file, items))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            return dict(executor.map(hash_file, items))
 
     def __bytes_repr__(
         self, cache: ty.Dict[ty.Any, str]  # pylint: disable=unused-argument

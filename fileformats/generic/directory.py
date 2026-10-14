@@ -54,6 +54,7 @@ class Directory(FsObject):
         relative_to: ty.Optional[Path] = None,
         ignore_hidden_files: bool = False,
         ignore_hidden_dirs: bool = False,
+        max_workers: ty.Optional[int] = None,
     ) -> ty.Dict[str, str]:
         if relative_to is None:
             relative_to = self.fspath
@@ -64,6 +65,7 @@ class Directory(FsObject):
             relative_to=relative_to,
             ignore_hidden_files=ignore_hidden_files,
             ignore_hidden_dirs=ignore_hidden_dirs,
+            max_workers=max_workers,
         )
 
     @property
