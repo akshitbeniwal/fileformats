@@ -56,7 +56,10 @@ def _make_outer(root: Path) -> Outer:
 
 
 def _contents(fileset: FileSet, root: Path) -> ty.Dict[str, str]:
-    return {str(p.relative_to(root)): p.read_text() for p in fileset.all_file_paths()}
+    # Keys use "/" separators on all platforms (incl. Windows)
+    return {
+        p.relative_to(root).as_posix(): p.read_text() for p in fileset.all_file_paths()
+    }
 
 
 def _modify(nested: FileSet, dest_dir: Path) -> ty.Optional[FileSet]:
