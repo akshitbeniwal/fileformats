@@ -578,21 +578,102 @@ class FileSet(DataType):
                     required.add(path)
         return frozenset(required)
 
-    def nested_filesets(self) -> ty.List["FileSet"]:
-        """Returns all nested filesets that are required for the format
+    def nested_filesets(self, recursive: bool = True) -> ty.List["FileSet"]:
+        """Returns all nested filesets that are required for the format, i.e. those
+        returned by its validated properties, including those within dicts and
+        sequences returned by them
+
+        Parameters
+        ----------
+        recursive : bool, optional
+            whether to also include the filesets nested within the nested filesets, by
+            default True
 
         Returns
         ------
         fileset : list[FileSet]
             a fileset that is nested within the broader fileset
         """
-        nested = []
+        nested: ty.List[FileSet] = []
+
+        def collect(value: ty.Any) -> None:
+            if isinstance(value, FileSet):
+                nested.append(value)
+                if recursive:
+                    nested.extend(value.nested_filesets())
+            elif isinstance(value, ty.Mapping):
+                for v in value.values():
+                    collect(v)
+            elif isinstance(value, (list, tuple, set, frozenset)):
+                for v in value:
+                    collect(v)
+
         for prop_name in sorted(self.validated_properties()):
-            prop = getattr(self, prop_name)
-            if isinstance(prop, FileSet):
-                nested.append(prop)
-                nested.extend(prop.nested_filesets())
+            collect(getattr(self, prop_name))
         return nested
+
+    def map_nested(
+        self,
+        out_dir: "os.PathLike[str] | str",
+        func: ty.Callable[["FileSet", Path], ty.Optional["FileSet"]],
+    ) -> Self:
+        """Writes a copy of the fileset to `out_dir`, in which the filesets nested
+        directly within it (see `nested_filesets`) are written by `func` and its
+        remaining files are copied unchanged, keeping the same layout relative to their
+        common parent directory. For example, to write converted or otherwise modified
+        versions of the nested filesets.
+
+        Nested filesets that point outside of the fileset (i.e. aren't made up of its
+        paths) aren't part of it, so are left out of the copy, as they are by `copy`
+
+        Parameters
+        ----------
+        out_dir : PathLike[str] | str
+            the directory to write the copy to
+        func : Callable[[FileSet, Path], FileSet | None]
+            called with each nested fileset and the directory it should be written to,
+            to be in the same position relative to the copy as the nested fileset is
+            to this fileset. It should write its counterpart there with the same
+            layout (e.g. names, so that the copy is still of this fileset's type) and
+            return it, or return None to have the nested fileset copied unchanged along
+            with the rest of the files. Nested filesets that are entirely within ones
+            already written by `func` aren't passed to it.
+
+        Returns
+        -------
+        Self
+            the copy of the fileset
+
+        Raises
+        ------
+        ValueError
+            if a nested fileset is made up of paths both within and outside the fileset
+        """
+        out_dir = Path(out_dir)
+        src_root = _root_dir(self)
+        own_paths = set(self.all_file_paths())
+        written: ty.Set[Path] = set()
+        for nested in self.nested_filesets(recursive=False):
+            nested_paths = set(nested.all_file_paths())
+            if outside := sorted(nested_paths - own_paths):
+                if outside == sorted(nested_paths):
+                    continue  # not part of the fileset
+                raise ValueError(
+                    f"{nested} is nested within {self}, but is made up of paths both "
+                    f"within it and outside it, {outside}"
+                )
+            if nested_paths <= written:
+                continue
+            dest_dir = out_dir / _root_dir(nested).relative_to(src_root)
+            if func(nested, dest_dir) is not None:
+                written.update(nested_paths)
+        for path in own_paths - written:
+            dest = out_dir / path.relative_to(src_root)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(path, dest)
+        # Reinstantiating the type checks that `func` preserved the layout it requires
+        # (e.g. didn't rename files it looks for)
+        return type(self)([out_dir / p.relative_to(src_root) for p in self.fspaths])
 
     def trim_paths(self) -> Self:
         """Trims paths in fspaths to only those that are "required" by the format class
@@ -2309,3 +2390,9 @@ class FileSet(DataType):
     _formats_by_name: ty.Optional[ty.Dict[str, ty.Set[ty.Type["FileSet"]]]] = None
     _required_props: ty.Optional[ty.Tuple[str, ...]] = None
     _valid_class: ty.Optional[bool] = None
+
+
+def _root_dir(fileset: FileSet) -> Path:
+    """The directory containing all of the fileset's paths (the parent of a directory
+    fileset rather than the directory itself)"""
+    return Path(os.path.commonpath([p.parent for p in fileset.fspaths]))
