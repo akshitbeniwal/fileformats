@@ -2,10 +2,14 @@ import functools
 import importlib
 import inspect
 import logging
+import os
+import shutil
+import tempfile
 import types
 import typing as ty
 import urllib.error
 from itertools import zip_longest
+from pathlib import Path
 from typing import Annotated, Self
 
 import fileformats.core
@@ -114,6 +118,56 @@ def extra(
     # implementations to it later
     decorated_extra._dispatch = dispatch_method  # type: ignore[attr-defined]
     return decorated_extra  # type: ignore[return-value]
+
+
+def staged_out_dir(
+    implementation: ty.Callable[..., ty.Any],
+    obj: ty.Any,
+    out_dir: "os.PathLike[str] | str",
+    *args: ty.Any,
+    **kwargs: ty.Any,
+) -> ty.Any:
+    """A wrapper for extra methods that write a fileset to the `out_dir` passed as
+    their first argument (e.g. ``@extra(wrapper=staged_out_dir)``), which passes the
+    implementations a hidden staging directory alongside `out_dir` instead, and only
+    moves its contents into `out_dir` once they have returned. That way, only complete
+    output ends up in `out_dir`, and implementations are free to copy files there and
+    modify them in place.
+
+    The implementations need to return a fileset within the `out_dir` they are passed,
+    which is returned relocated to the requested `out_dir`. Any existing files in
+    `out_dir` are left in place, but a FileExistsError is raised, before anything is
+    moved, if the output would overwrite any of them.
+    """
+    out_dir = Path(out_dir).absolute()
+    out_dir.parent.mkdir(parents=True, exist_ok=True)
+    staging_dir = Path(
+        tempfile.mkdtemp(dir=out_dir.parent, prefix=f".staging-{out_dir.name}-")
+    )
+    try:
+        output = implementation(obj, staging_dir, *args, **kwargs)
+        try:
+            rel_fspaths = [
+                p.absolute().relative_to(staging_dir) for p in output.fspaths
+            ]
+        except ValueError:
+            raise RuntimeError(
+                f"The {getattr(implementation, '__name__', implementation)!r} "
+                f"implementation for {type(obj)} didn't write its output to the "
+                f"'out_dir' it was passed: {output.fspaths}"
+            ) from None
+        entries = sorted(staging_dir.iterdir())
+        if existing := [e.name for e in entries if (out_dir / e.name).exists()]:
+            raise FileExistsError(
+                f"Cannot write the output for {obj} into {out_dir} as {existing} "
+                "already exist(s) there"
+            )
+        out_dir.mkdir(exist_ok=True)
+        for entry in entries:
+            os.replace(entry, out_dir / entry.name)
+    finally:
+        shutil.rmtree(staging_dir, ignore_errors=True)
+    return type(output)([out_dir / p for p in rel_fspaths])
 
 
 def _import_base_extras_modules(datatype: ty.Type[DataType]) -> None:
