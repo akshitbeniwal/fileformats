@@ -6,6 +6,7 @@ import pytest
 from pydra.compose import python, shell
 
 from conftest import write_test_file
+from fileformats.application import Tar, TarGzip, Zip
 from fileformats.core import ConvertibleToMarker, converter
 from fileformats.core.exceptions import FormatConversionError
 from fileformats.generic import File, FileSet
@@ -101,6 +102,29 @@ def test_convert_mapped_conversion(work_dir):
     assert bar.raw_contents == baz.raw_contents
 
 
+def archives_of(klass: type[FileSet]) -> tuple[type[FileSet], ...]:
+    """The archive types that any type can be extracted from by the generic converters
+    from archives, e.g. `Zip[Compressed]` -> `Compressed`"""
+    return (TarGzip[klass], Tar[klass], Zip[klass])
+
+
+def split_convertible_from(
+    klass: type[FileSet], **kwargs: ty.Any
+) -> tuple[tuple[type[FileSet], ...], tuple[type[FileSet], ...]]:
+    """Splits the types that `klass` is convertible from into the generic ones (i.e.
+    the source types of generic converters with their wildcards resolved to `klass`,
+    e.g. `Zip[klass]`) and the rest. Which generic converters are registered depends
+    on the other tests that have been run (e.g. the classifier tests), so the generic
+    ones can only be checked for the archive types"""
+    hint = klass.convertible_from(**kwargs)
+    assert ConvertibleToMarker.from_hint(hint) == ConvertibleToMarker(klass)
+    members = ty.get_args(ty.get_args(hint)[0]) or (ty.get_args(hint)[0],)
+    generic = tuple(
+        t for t in members if klass in getattr(t, "classifiers", ()) and t is not klass
+    )
+    return tuple(t for t in members if t not in generic), generic
+
+
 @pytest.mark.parametrize(
     ["klass", "convertible_from"],
     [
@@ -115,7 +139,6 @@ def test_convert_mapped_conversion(work_dir):
     ],
 )
 def test_convertible_from(klass: type[FileSet], convertible_from: type[FileSet]):
-    assert (
-        klass.convertible_from()
-        == ty.Annotated[convertible_from, ConvertibleToMarker(klass)]
-    )
+    direct, generic = split_convertible_from(klass)
+    assert set(direct) == set(ty.get_args(convertible_from) or (convertible_from,))
+    assert set(archives_of(klass)).issubset(generic)

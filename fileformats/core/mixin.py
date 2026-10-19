@@ -685,11 +685,17 @@ class WithClassifiers:
                         f"({list(source_wildcard_classifiers)}), and target "
                         f"{cls} ({cls.wildcard_classifiers()})"
                     )
+                # Check the converters registered on the unclassified type, which is
+                # where generic converters are stored (see below), rather than
+                # `cls.converters`, which may be inherited from a base class (e.g.
+                # `FsObject`) and hold converters from types that aren't classified
+                converters_dict = cls.unclassified.get_converters_dict()  # type: ignore[attr-defined]
                 prev_registered = [
                     f
-                    for f in cls.converters  # type: ignore[attr-defined]
+                    for f in converters_dict
                     if (
-                        issubclass(source_format.unclassified, f.unclassified)  # type: ignore[attr-defined]
+                        getattr(f, "is_classified", False)
+                        and issubclass(source_format.unclassified, f.unclassified)  # type: ignore[attr-defined]
                         and f.non_wildcard_classifiers()
                         == source_format.non_wildcard_classifiers()  # type: ignore[attr-defined]
                     )
@@ -697,7 +703,7 @@ class WithClassifiers:
                 assert len(prev_registered) <= 1
                 prev = prev_registered[0] if prev_registered else None
                 if prev:
-                    prev_converter = cls.converters[prev]  # type: ignore[attr-defined]
+                    prev_converter = converters_dict[prev]
                     # task, task_kwargs = converter_spec
                     # prev_task, prev_kwargs, prev_classifiers = prev_tuple
                     if converter == prev_converter:

@@ -1011,7 +1011,16 @@ class FileSet(DataType):
         for subcls in subclasses:
             if issubclass(subcls, cls):
                 subcls._import_extras_module()
-                datatypes.extend(subcls.get_converters_dict().keys())
+                # Skip the source types of generic converters (e.g. `SetOf[T]` for
+                # `SetOf[T]` -> `DirectoryOf[T]`), which can't be used as concrete
+                # datatypes, and are added below with their wildcards resolved from the
+                # classifiers of this type where possible
+                datatypes.extend(
+                    t
+                    for t in subcls.get_converters_dict().keys()
+                    if not _has_wildcard_classifiers(t)
+                )
+        datatypes.extend(cls._resolved_wildcard_sources())
         marker = ConvertibleToMarker(cls)
         if len(datatypes) == 1:
             return ty.Annotated[cls, marker]
@@ -1035,6 +1044,79 @@ class FileSet(DataType):
             operator.or_, sorted(concrete_datatypes, key=union_sort_key)
         )
         return ty.Annotated[union, marker]
+
+    @classmethod
+    def _resolved_wildcard_sources(cls) -> ty.List[ty.Type[DataType]]:
+        """The source types of the generic converters that can convert to this type,
+        with their wildcard classifiers resolved from this type, e.g. `Zip[TextFile]`
+        for `TextFile` (from `Zip[Compressed]` -> `Compressed`) and `SetOf[TextFile]`
+        for `DirectoryOf[TextFile]` (from `SetOf[T]` -> `DirectoryOf[T]`). Only those
+        that a converter can actually be found from with `get_converter` are returned.
+        """
+        from .converter_helpers import SubtypeVar
+
+        if _has_wildcard_classifiers(cls):
+            return []  # nothing to resolve the wildcards from
+        # The extras modules of generically classifiable types (e.g. archives) register
+        # generic converters to and from them for any type (e.g. `Zip[X]` -> `X`), so
+        # import them, so the result doesn't depend on which happen to be imported
+        for generic_type in set(DataType.generically_classifiable_by_name.values()):
+            generic_type._import_extras_module()  # type: ignore[attr-defined]
+
+        # The source types of generic converters, and the types their wildcards resolve
+        # to for this type
+        candidates: ty.List[
+            ty.Tuple[ty.Type[DataType], ty.Dict[ty.Type[DataType], ty.Type[DataType]]]
+        ] = []
+        # Converters from generic types to the types they are classified by, e.g.
+        # `Zip[Compressed]` -> `Compressed`
+        for extracted_from in SubtypeVar.converters:
+            (wildcard,) = extracted_from.wildcard_classifiers()  # type: ignore[attr-defined]
+            if issubclass(cls, wildcard.bound):  # type: ignore[attr-defined]
+                candidates.append((extracted_from, {wildcard: cls}))
+        # Converters between generic types, or to a generic type, registered on the
+        # unclassified type, e.g. `SetOf[T]` -> `DirectoryOf[T]` and
+        # `Compressed` -> `Zip[Compressed]`, where the wildcard is resolved from the
+        # classifier of this type in place of the target's wildcard
+        if getattr(cls, "is_classified", False):
+            converters_dict = FileSet.get_converters_dict(
+                cls.unclassified  # type: ignore[attr-defined]
+            )
+            for source_template, generic_converter in converters_dict.items():
+                if not generic_converter.classifiers:
+                    continue  # not a generic converter
+                wildcards = cls.wildcard_classifiers(  # type: ignore[attr-defined]
+                    generic_converter.classifiers
+                )
+                non_wildcards = cls.non_wildcard_classifiers(  # type: ignore[attr-defined]
+                    generic_converter.classifiers
+                )
+                actual = set(cls.classifiers).difference(  # type: ignore[attr-defined]
+                    non_wildcards
+                )
+                if (
+                    len(wildcards) != 1
+                    or len(actual) != 1
+                    or not non_wildcards.issubset(cls.classifiers)  # type: ignore[attr-defined]
+                ):
+                    continue
+                candidates.append(
+                    (source_template, {next(iter(wildcards)): next(iter(actual))})
+                )
+        resolved = []
+        for unresolved, mapping in candidates:
+            try:
+                # Resolving the wildcards can produce an invalid type (e.g. one with
+                # classifiers that clash), in which case there is nothing to add
+                candidate = _resolve_wildcards(unresolved, mapping)
+                if candidate is cls:
+                    continue
+                found = cls.get_converter(candidate)
+            except (FormatConversionError, FormatDefinitionError):
+                continue
+            if found is not None:  # i.e. not just a subclass of this type
+                resolved.append(candidate)
+        return resolved
 
     @classmethod
     def get_converter_defs(cls, source_format: type) -> ty.List["Converter"]:
@@ -2415,3 +2497,31 @@ def _root_dir(fileset: FileSet) -> Path:
     """The directory containing all of the fileset's paths (the parent of a directory
     fileset rather than the directory itself)"""
     return Path(os.path.commonpath([p.parent for p in fileset.fspaths]))
+
+
+def _has_wildcard_classifiers(datatype: ty.Type[DataType]) -> bool:
+    """Whether the type is classified by wildcards (e.g. `SetOf[T]`), i.e. a template
+    for the source or target types of generic converters"""
+    try:
+        return bool(datatype.wildcard_classifiers())  # type: ignore[attr-defined]
+    except (AttributeError, TypeError):
+        return False
+
+
+def _resolve_wildcards(
+    template: ty.Type[DataType],
+    mapping: ty.Mapping[ty.Type[DataType], ty.Type[DataType]],
+) -> ty.Type[DataType]:
+    """Substitute the wildcard classifiers of a generic converter's source type with the
+    types they resolve to, e.g. `SetOf[T]` with {T: TextFile} -> `SetOf[TextFile]`, or
+    the type itself if the source type is the wildcard, e.g. `Compressed` -> `TextFile`
+    """
+    from .converter_helpers import SubtypeVar
+
+    if issubclass(template, SubtypeVar):
+        return mapping[template]
+    classifiers = tuple(
+        mapping.get(c, c) for c in template.classifiers  # type: ignore[attr-defined]
+    )
+    unclassified = template.unclassified  # type: ignore[attr-defined]
+    return unclassified[classifiers if len(classifiers) > 1 else classifiers[0]]  # type: ignore[no-any-return]
