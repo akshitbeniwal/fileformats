@@ -60,17 +60,21 @@ def test_convertible_requires_format():
 
 
 @pytest.mark.parametrize(
-    ["hint", "mime"],
+    ["make_hint", "mime"],
     [
-        [ConvertibleTo[Bar], "testing/bar+convertible-to"],
-        [ConvertibleTo[Foo], "testing/foo+convertible-to"],
-        [ConvertibleTo[Baz], "testing/baz+convertible-to"],
-        [ConvertibleTo[Bar] | None, "testing/bar+convertible-to?"],
-        [list[ConvertibleTo[Bar]], "testing/bar+convertible-to+list-of"],
-        [ConvertibleTo[Bar] | Qux, "testing/bar+convertible-to|testing/qux"],
+        [lambda: ConvertibleTo[Bar], "testing/bar+convertible-to"],
+        [lambda: ConvertibleTo[Foo], "testing/foo+convertible-to"],
+        [lambda: ConvertibleTo[Baz], "testing/baz+convertible-to"],
+        [lambda: ConvertibleTo[Bar] | None, "testing/bar+convertible-to?"],
+        [lambda: list[ConvertibleTo[Bar]], "testing/bar+convertible-to+list-of"],
+        [lambda: ConvertibleTo[Bar] | Qux, "testing/bar+convertible-to|testing/qux"],
     ],
 )
-def test_convertible_mime_roundtrip(hint: ty.Any, mime: str):
+def test_convertible_mime_roundtrip(make_hint: ty.Callable[[], ty.Any], mime: str):
+    # The hints are created in the test, rather than when the parameters are collected,
+    # as the types they evaluate to depend on the converters that have been registered
+    # by then (e.g. generic converters registered by other test modules)
+    hint = make_hint()
     assert to_mime(hint, official=False) == mime
     assert from_mime(mime) == hint
 
