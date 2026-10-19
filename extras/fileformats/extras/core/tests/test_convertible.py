@@ -2,9 +2,7 @@ import inspect
 import typing as ty
 
 import pytest
-
-# Registers the converters between the testing formats
-import test_converter  # noqa: F401
+from test_converter import archives_of, split_convertible_from
 
 from fileformats.core import (
     ConvertibleTo,
@@ -21,19 +19,24 @@ from fileformats.testing import Bar, Baz, Foo, Qux
 def test_convertible_to_hint():
     hint = ConvertibleTo[Bar]
     assert ty.get_origin(hint) is ty.Annotated
-    assert ty.get_args(hint)[0] == Bar | Baz | Foo
+    direct, generic = split_convertible_from(Bar)
+    assert set(direct) == {Bar, Baz, Foo}
+    assert set(archives_of(Bar)).issubset(generic)
     marker = ConvertibleToMarker.from_hint(hint)
     assert marker == ConvertibleToMarker(Bar)
     assert marker.format is Bar
     assert hint == Bar.convertible_from()
     assert marker.hint() == hint
-    assert marker.resolve() == Bar | Baz | Foo
+    assert marker.resolve() == ty.get_args(hint)[0]
     assert LoadedMarker.from_hint(hint) is None
 
 
 def test_convertible_no_converters():
     hint = ConvertibleTo[Baz]
-    assert ty.get_args(hint)[0] is Baz
+    # Only generic converters (e.g. from archives) can convert to Baz
+    direct, generic = split_convertible_from(Baz)
+    assert direct == (Baz,)
+    assert set(archives_of(Baz)).issubset(generic)
     assert ConvertibleToMarker.from_hint(hint).format is Baz
 
 
@@ -90,8 +93,6 @@ def test_convertible_sorted_by_specificity():
         assert len(args) > 1
         for i, tp in enumerate(args):
             assert not any(issubclass(later, tp) for later in args[i + 1 :])
-    assert ty.get_args(ty.get_args(Png.convertible_from())[0]) == (Png, RasterImage)
-    by_name = ty.get_args(
-        ty.get_args(Bar.convertible_from(union_sort_key=lambda t: t.__name__))[0]
-    )
+    assert split_convertible_from(Png)[0] == (Png, RasterImage)
+    by_name = split_convertible_from(Bar, union_sort_key=lambda t: t.__name__)[0]
     assert by_name == (Bar, Baz, Foo)
